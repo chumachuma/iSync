@@ -60,7 +60,7 @@ class IdmsaAppleService(HTTPService):
 
     def getRequestHeader (self, appleWidgetKey):
         if not appleWidgetKey:
-            raise NameError("getSetupQueryParameters: clientID not found")
+            raise NameError("getRequestHeader: clientID not found")
         return {
                 "Accept": "application/json, text/javascript",
                 "Content-Type": "application/json",
@@ -97,7 +97,7 @@ class SetupiCloudService(HTTPService):
     def requestAppleWidgetKey (self, clientID):
         #self.urlBase + "/system/cloudos/16CHotfix21/en-us/javascript-packed.js"
         self.session.headers = self.getRequestHeader()
-        self.response.value = self.session.get(self.urlKey, params=self.getSetupQueryParameters(clientID))
+        self.response.value = self.session.get(self.urlKey, params=self.getQueryParameters(clientID))
         try:
             self.appleWidgetKey = self.findQyery(self.response().text, "widgetKey=")
         except Exception as e:
@@ -109,7 +109,7 @@ class SetupiCloudService(HTTPService):
         self.session.headers = self.getRequestHeader()
         self.response.value = self.session.post(self.urlLogin,
                                           self.getLoginRequestPayload(appleSessionToken),
-                                          params=self.getSetupQueryParameters(clientID))
+                                          params=self.getQueryParameters(clientID))
         try:
             self.cookies = self.response().headers["Set-Cookie"]
         except Exception as e:
@@ -146,9 +146,9 @@ class SetupiCloudService(HTTPService):
                 "Referer": self.referer,
                }
 
-    def getSetupQueryParameters (self, clientID):
+    def getQueryParameters (self, clientID):
         if not clientID:
-            raise NameError("getSetupQueryParameters: clientID not found")
+            raise NameError("getQueryParameters: clientID not found")
         return {
                 "clientBuildNumber": "16CHotfix21",
                 "clientID": clientID,
@@ -164,34 +164,62 @@ class SetupiCloudService(HTTPService):
                 })
 
     
-class ICloudService(HTTPService):
-    def __init__ (self):
-        super(ICloudService, self).__init__(session)
+class ICloudWebService(HTTPService):
+    def __init__ (self, session):
+        super(ICloudWebService, self).__init__(session)
         self.url = "https://www.icloud.com"
         self.urlApp = self.url + "/applications"
 
-class ReminderWidget (HTTPService):
-    def __init__ (self, session):
-        super(ReminderWidget, self).__init__()
-        self.session = session
-        self.urlReminder = self.urlApp + "/reminders/current/en-gb/index.html"
+    def requestReminderWidget(self, cookies, clientID, dsid):
+        #self.session.headers = self.getRequestHeader(cookies)
+        self.response.value = self.session.get("https://p47-remindersws.icloud.com/rd/startup", #TODO: hardcoded!
+                params=self.getQueryParameters(clientID, dsid))
+        self.reminderResponse = self.response()
 
-    def getRequestHeader (self, cookie):
+    def getReminderLists (self):
+        reminderLists = []
+        for collection in self.reminderResponse.json()["Collections"]:
+            reminderLists.append(collection["title"])
+        return reminderLists
+
+    def getCollectionGUID (self, title):
+        for collection in self.reminderResponse.json()["Collections"]:
+            if title == collection["title"]:
+                return collection["guid"]
+
+    def getReminderList (self, collection):
+        reminderList = []
+        print(self.getReminderLists())
+        if collection not in self.getReminderLists():
+            raise Exception("getReminderList: " + collection + " could not be found") #TODO: error handling full class
+        guid = self.getCollectionGUID(collection)
+        for reminder in self.reminderResponse.json()["Reminders"]:
+            if guid == reminder["pGuid"]:
+                reminderList.append(reminder["title"])
+        return reminderList
+
+    def getRequestHeader (self, cookies):
         return {
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept": "*/*",
+                "Accpet-Encoding": "gzip, deflate, sdch",
                 "Connection": "keep-alive",
-                "Cookie": cookie,
-                "Host": self.urlBase,
-                "Referer": self.urlBase,
-                "Upgrade-Insecure-Requests":"1",
+                "Content-Type": "text/plain",
+                "Cookie": cookies,
+                "Origin": self.origin,
+                "Referer": self.referer,
                 "User-Agent": self.userAgent,
                }
 
-    def getReminderList (self, cookie):
-        self.session.headers.update(self.getRequestHeader(cookie))
-        response = self.session.get(self.urlReminder)
-        response.raise_for_status()
-        print(response.text)
+    def getQueryParameters (self, clientID, dsid):
+        return {
+                "clientBuildNumber": "16CProject50",
+                "clientId": clientID,                                                                     
+                "clientMasteringNumber": "16C149",
+                "dsid": dsid,
+                "clientVersion": "4.0",
+                "lang": "en-gb", #TODO: hardcoded!
+                "usertz": "Europe/Madrid", #TODO: hardcoded!
+               }
 
 
 class PyiCloudService (HTTPService):
@@ -209,21 +237,22 @@ class PyiCloudService (HTTPService):
 
         self.idmsaApple = IdmsaAppleService(self)
         self.setupiCloud = SetupiCloudService(self)
+        self.iCloudWeb = ICloudWebService(self)
+        self.iCloudResponse = None
 
     def login (self):
         user = self.parseAccountName(input("User: "))
         password = getpass.getpass()
         self.initSession(user, password)
 
-    def initSession (self,user, password):
-        clientID = self.clientID = self.generateClientID()
-        print(clientID)
-        widgetKey = self.setupiCloud.requestAppleWidgetKey(clientID)
-        print(widgetKey)
+    def initSession (self,user, password): #TODO: to much selfs!
+        self.clientID = self.generateClientID()
+        widgetKey = self.setupiCloud.requestAppleWidgetKey(self.clientID)
         sessionToken = self.idmsaApple.requestAppleSessionToken(user, password, widgetKey)
-        print(sessionToken)
-        cookies, dsid = self.setupiCloud.requestCookies(sessionToken, clientID)
-        return (cookies, dsid)
+        self.cookies, self.dsid = self.setupiCloud.requestCookies(sessionToken, self.clientID)
+        self.iCloudResponse = self.response()
+        appsOrder = self.iCloudResponse.json()["appsOrder"]
+        webservices = self.iCloudResponse.json()["webservices"]
 
     def generateClientID (self):
         return str(generateClientID()).upper()
@@ -245,14 +274,13 @@ class PyiCloudService (HTTPService):
         return text.replace(' ', '').replace('\t', '')
     
 if __name__ == "__main__":
-    myI = PyiCloudService()
-    myI.requestAppleWidgetKey()
-    myI.login()
+    myICloud = PyiCloudService()
+    myICloud.login()
+    myICloud.iCloudWeb.requestReminderWidget(myICloud.cookies, myICloud.clientID, myICloud.dsid)
+    TODO_LIST = myICloud.iCloudWeb.getReminderList("TODO")
+    print(TODO_LIST)
     
 ### TEST ###
-    tPyiCloud = PyiCloud()
-    #assert tPyiCloud.getQueryString({"a":"1", "b":"2", "c":False}) == "a=1&b=2&c=False"
-
-    tPyiCloudService = PyiCloudService()
-    tPyiCloudService.requestAppleWidgetKey()
-    assert tPyiCloudService.appleWidgetKey == "83545bf919730e51dbfba24e7e8a78d2"
+    #tPyiCloudService = PyiCloudService()
+    #tPyiCloudService.requestAppleWidgetKey()
+    #assert tPyiCloudService.appleWidgetKey == "83545bf919730e51dbfba24e7e8a78d2"
