@@ -2,10 +2,11 @@ import requests
 from json import dumps as json
 from uuid import uuid1 as generateClientID
 import getpass
+import pickle
 
 __author__ = "JiaJiunn Chiou"
 __license__= ""
-__version__= "0.0.1"
+__version__= "0.0.2"
 __status__ = "Prototype"
 
 class Pointer:
@@ -48,7 +49,7 @@ class IdmsaAppleService(HTTPService):
         self.appleSessionToken = None
 
     def requestAppleSessionToken (self, user, password, appleWidgetKey):
-        self.session.headers = self.getRequestHeader(appleWidgetKey)
+        self.session.headers.update(self.getRequestHeader(appleWidgetKey))
         self.response.value = self.session.post(self.urlAuth + appleWidgetKey,
                 self.getRequestPayload(user, password))
         try:
@@ -96,7 +97,7 @@ class SetupiCloudService(HTTPService):
     
     def requestAppleWidgetKey (self, clientID):
         #self.urlBase + "/system/cloudos/16CHotfix21/en-us/javascript-packed.js"
-        self.session.headers = self.getRequestHeader()
+        self.session.headers.update(self.getRequestHeader())
         self.response.value = self.session.get(self.urlKey, params=self.getQueryParameters(clientID))
         try:
             self.appleWidgetKey = self.findQyery(self.response().text, "widgetKey=")
@@ -106,7 +107,7 @@ class SetupiCloudService(HTTPService):
         return self.appleWidgetKey
      
     def requestCookies (self, appleSessionToken, clientID):
-        self.session.headers = self.getRequestHeader()
+        self.session.headers.update(self.getRequestHeader())
         self.response.value = self.session.post(self.urlLogin,
                                           self.getLoginRequestPayload(appleSessionToken),
                                           params=self.getQueryParameters(clientID))
@@ -171,7 +172,6 @@ class ICloudWebService(HTTPService):
         self.urlApp = self.url + "/applications"
 
     def requestReminderWidget(self, cookies, clientID, dsid):
-        #self.session.headers = self.getRequestHeader(cookies)
         self.response.value = self.session.get("https://p47-remindersws.icloud.com/rd/startup", #TODO: hardcoded!
                 params=self.getQueryParameters(clientID, dsid))
         self.reminderResponse = self.response()
@@ -243,6 +243,10 @@ class PyiCloudService (HTTPService):
     def login (self):
         user = self.parseAccountName(input("User: "))
         password = getpass.getpass()
+        try: #Try to restore previous login
+            self.session.cookies.update(self.restoreCookies())
+        except:
+            pass #TODO: raise something?
         self.initSession(user, password)
 
     def initSession (self,user, password): #TODO: to much selfs!
@@ -253,6 +257,17 @@ class PyiCloudService (HTTPService):
         self.iCloudResponse = self.response()
         appsOrder = self.iCloudResponse.json()["appsOrder"]
         webservices = self.iCloudResponse.json()["webservices"]
+        self.storeCookies()
+
+    def storeCookies (self): #TODO: path hardcoded
+        with open (".config/cookies", "wb") as cookieFile:
+            pickle.dump(self.session.cookies, cookieFile, pickle.HIGHEST_PROTOCOL)
+
+    def restoreCookies (self): #TODO: path hardcoded
+        cookies = None
+        with open (".config/cookies", "rb") as cookieFile:
+            cookies = pickle.load(cookieFile)
+        return cookies
 
     def generateClientID (self):
         return str(generateClientID()).upper()
